@@ -1,0 +1,96 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+library(GEOquery)
+library(limma)
+library(tidyverse)
+library(readxl)
+```
+
+# GSE141549 (Gabriel) DEA
+
+## Load pre-processed data
+```{r, echo=FALSE}
+# load data from GEO
+gabriel_geo <- getGEO('GSE141549')
+gabriel_geo_plat1 <- gabriel_geo[[1]]
+gabriel_geo_plat1[['disease stage:ch1']] <- as.integer(gabriel_geo_plat1[['disease stage:ch1']] != "Healthy")
+gabriel_geo_plat2 <- gabriel_geo[[2]]
+gabriel_geo_plat2[['disease stage:ch1']] <- as.integer(gabriel_geo_plat2[['disease stage:ch1']] != "Healthy")
+
+
+# for some reason, the above load doesn't include expression data,
+# so have to manually download from NCI website 
+# downloaded from here https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE141549
+gabriel_expr_data <- read_excel('data/GSE141549_batchCorrectednormalizedArrayscombined.xlsx')
+```
+
+## Get top differentially expressed genes
+```{r}
+# get sample phenotypes (endometriosis vs non-endometriosis)
+gabriel_plat1_lbls <- pData(gabriel_geo_plat1) |> 
+  select(title, `disease stage:ch1`) |>
+  drop_na(`disease stage:ch1`)
+gabriel_plat2_lbls <- pData(gabriel_geo_plat2) |> 
+  select(title, `disease stage:ch1`) |>
+  drop_na(`disease stage:ch1`)
+gabriel_lbls <- bind_rows(gabriel_plat1_lbls, gabriel_plat2_lbls) |> arrange(title)
+design <- model.matrix( ~ 0 + gabriel_lbls[['disease stage:ch1']])
+
+gabriel_expr_data_input <- gabriel_expr_data |> 
+  column_to_rownames(var="Probe_Id") |>
+  select(gabriel_lbls$title) 
+  
+# get top 20 differentially expressed genes
+gabriel_fit <- lmFit(gabriel_expr_data_input, design)
+gabriel_fit_ebayes <- eBayes(gabriel_fit)
+gabriel_top <- topTable(gabriel_fit_ebayes, number=20)
+
+gabriel_probe_to_gene <- gabriel_expr_data |>
+  select(Probe_Id, Gene_symbol)
+
+gabriel_top_genes <- gabriel_top |>
+  rownames_to_column(var='Probe_Id') |>
+  inner_join(gabriel_probe_to_gene, by=c('Probe_Id')) |>
+  select(Gene_symbol)
+```
+
+# GSE51981 (Tamaresis) DEA
+
+## Load pre-processed data
+```{r}
+# load data from GEO
+tamaresis_geo <- getGEO('GSE51981')
+tamaresis_geo_plat1 <- tamaresis_geo[[1]]
+tamaresis_geo_plat1[["endometriosis/no endometriosis:ch1"]] <-
+  as.integer(tamaresis_geo_plat1[["endometriosis/no endometriosis:ch1"]] == "Endometriosis")
+```
+
+## Get top differentially expressed genes
+```{r}
+# get sample phenotypes (endometriosis vs non-endometriosis)
+tamaresis_lbls <- pData(tamaresis_geo_plat1) |> 
+  select(geo_accession, `endometriosis/no endometriosis:ch1`) |>
+  drop_na(`endometriosis/no endometriosis:ch1`)
+tamaresis_design <- model.matrix( ~ 0 + tamaresis_lbls)
+
+tamaresis_expr_data <- as.data.frame(exprs(tamaresis_geo_plat1)) |>
+  select(tamaresis_lbls$geo_accession) 
+
+# get top 20 differentially expressed genes
+tamaresis_fit <- lmFit(tamaresis_expr_data, tamaresis_design)
+tamaresis_fit_ebayes <- eBayes(tamaresis_fit)
+tamaresis_top <- topTable(tamaresis_fit_ebayes, number=20)
+
+tamaresis_probe_to_gene <- pData(featureData(tamaresis_geo_plat1)) |> 
+  select(ID, `Gene Symbol`)
+
+tamaresis_top_genes <- tamaresis_top |>
+  rownames_to_column(var='ID') |>
+  inner_join(tamaresis_probe_to_gene, by=c('ID')) |>
+  select(`Gene Symbol`)
+```
+
