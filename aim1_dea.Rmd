@@ -4,15 +4,22 @@ output: html_notebook
 ---
 
 ```{r, echo=FALSE, message=FALSE, warning=FALSE}
+renv::restore()
+
 library(GEOquery)
 library(limma)
 library(tidyverse)
 library(readxl)
+library(pheatmap)
+library(affy)
+library(annotate)
+library(RColorBrewer)
+library(hgu133plus2.db)
+library(hgu133plus2cdf)
 ```
 
 # GSE141549 (Gabriel) DEA
 
-## Load pre-processed data
 ```{r, echo=FALSE}
 # load data from GEO
 gabriel_geo <- getGEO('GSE141549')
@@ -28,69 +35,152 @@ gabriel_geo_plat2[['disease stage:ch1']] <- as.integer(gabriel_geo_plat2[['disea
 gabriel_expr_data <- read_excel('data/GSE141549_batchCorrectednormalizedArrayscombined.xlsx')
 ```
 
-## Get top differentially expressed genes
 ```{r}
 # get sample phenotypes (endometriosis vs non-endometriosis)
 gabriel_plat1_lbls <- pData(gabriel_geo_plat1) |> 
-  select(title, `disease stage:ch1`) |>
+  dplyr::select(title, `disease stage:ch1`) |>
   drop_na(`disease stage:ch1`)
 gabriel_plat2_lbls <- pData(gabriel_geo_plat2) |> 
-  select(title, `disease stage:ch1`) |>
+  dplyr::select(title, `disease stage:ch1`) |>
   drop_na(`disease stage:ch1`)
 gabriel_lbls <- bind_rows(gabriel_plat1_lbls, gabriel_plat2_lbls) |> arrange(title)
-design <- model.matrix( ~ 0 + gabriel_lbls[['disease stage:ch1']])
+gabriel_design <- model.matrix( ~gabriel_lbls[['disease stage:ch1']])
 
 gabriel_expr_data_input <- gabriel_expr_data |> 
   column_to_rownames(var="Probe_Id") |>
-  select(gabriel_lbls$title) 
-  
-# get top 20 differentially expressed genes
-gabriel_fit <- lmFit(gabriel_expr_data_input, design)
+  dplyr::select(gabriel_lbls$title)
+```
+
+
+```{r}
+# hierarchically cluster expression data to see if there's normal/disease separation
+gabriel_dists <- dist(t(gabriel_expr_data_input))
+gabriel_dists_mat <- as.matrix(gabriel_dists)
+rownames(gabriel_dists_mat) <- gabriel_lbls[['disease stage:ch1']]
+colnames(gabriel_dists_mat) <- NULL
+colors <- colorRampPalette(rev(brewer.pal(9, "Blues")) )(255)
+pheatmap(gabriel_dists_mat,
+         clustering_distance_rows = gabriel_dists,
+         clustering_distance_cols = gabriel_dists,
+         col = colors)
+```
+
+```{r}
+# get top differentially expressed genes
+gabriel_fit <- lmFit(gabriel_expr_data_input, gabriel_design)
 gabriel_fit_ebayes <- eBayes(gabriel_fit)
-gabriel_top <- topTable(gabriel_fit_ebayes, number=20)
+gabriel_top <- topTable(gabriel_fit_ebayes, sort.by='logFC', number=Inf)
 
 gabriel_probe_to_gene <- gabriel_expr_data |>
-  select(Probe_Id, Gene_symbol)
+  dplyr::select(Probe_Id, Gene_symbol) |>
+  dplyr::rename(gene_symbol = Gene_symbol, probe_id = Probe_Id) 
 
 gabriel_top_genes <- gabriel_top |>
-  rownames_to_column(var='Probe_Id') |>
-  inner_join(gabriel_probe_to_gene, by=c('Probe_Id')) |>
-  select(Gene_symbol)
+  rownames_to_column(var='probe_id') |>
+  inner_join(gabriel_probe_to_gene, by=c('probe_id')) |>
+  filter((abs(logFC) > 1.1 & adj.P.Val < 0.05))
 ```
 
 # GSE51981 (Tamaresis) DEA
 
-## Load pre-processed data
 ```{r}
-# load data from GEO
+# load preprocessed data from GEO (just to get phenotype labels)
 tamaresis_geo <- getGEO('GSE51981')
 tamaresis_geo_plat1 <- tamaresis_geo[[1]]
 tamaresis_geo_plat1[["endometriosis/no endometriosis:ch1"]] <-
   as.integer(tamaresis_geo_plat1[["endometriosis/no endometriosis:ch1"]] == "Endometriosis")
 ```
 
-## Get top differentially expressed genes
 ```{r}
 # get sample phenotypes (endometriosis vs non-endometriosis)
 tamaresis_lbls <- pData(tamaresis_geo_plat1) |> 
-  select(geo_accession, `endometriosis/no endometriosis:ch1`) |>
+  dplyr::select(geo_accession, `endometriosis/no endometriosis:ch1`) |>
   drop_na(`endometriosis/no endometriosis:ch1`)
-tamaresis_design <- model.matrix( ~ 0 + tamaresis_lbls)
+tamaresis_design <- model.matrix( ~tamaresis_lbls[['endometriosis/no endometriosis:ch1']])
 
-tamaresis_expr_data <- as.data.frame(exprs(tamaresis_geo_plat1)) |>
-  select(tamaresis_lbls$geo_accession) 
+# get expression data
+tamaresis_expr_data_df <- as.data.frame(exprs(tamaresis_geo_plat1)) |>
+  dplyr::select(tamaresis_lbls$geo_accession)
+```
 
-# get top 20 differentially expressed genes
-tamaresis_fit <- lmFit(tamaresis_expr_data, tamaresis_design)
+```{r}
+# hierarchically cluster expression data to see if there's normal/disease separation
+tamaresis_dists <- dist(t(tamaresis_expr_data_df))
+tamaresis_dists_mat <- as.matrix(tamaresis_dists)
+colors <- colorRampPalette(rev(brewer.pal(9, "Blues")) )(255)
+
+annot_df <- data.frame(grp = factor(tamaresis_lbls[['endometriosis/no endometriosis:ch1']],
+                                    levels=c(0, 1),
+                                    labels=c("control", "disease")))
+rownames(annot_df) <- rownames(tamaresis_dists_mat)
+
+grp_colors <- c("blue", "red")
+names(grp_colors) <- c("control", "disease")
+annot_colors <- list(grp = grp_colors)
+
+pheatmap(tamaresis_dists_mat,
+         clustering_distance_rows = tamaresis_dists,
+         clustering_distance_cols = tamaresis_dists,
+         color = colors,
+         annotation_row = annot_df,
+         annotation_colors=annot_colors,
+         show_rownames=F,
+         show_colnames=F)
+```
+
+
+```{r}
+# get top differentially expressed genes
+tamaresis_fit <- lmFit(tamaresis_expr_data_df, tamaresis_design)
 tamaresis_fit_ebayes <- eBayes(tamaresis_fit)
-tamaresis_top <- topTable(tamaresis_fit_ebayes, number=20)
+tamaresis_top <- topTable(tamaresis_fit_ebayes, sort.by='logFC', number=Inf)
 
-tamaresis_probe_to_gene <- pData(featureData(tamaresis_geo_plat1)) |> 
-  select(ID, `Gene Symbol`)
-
+tamaresis_probe_to_gene <- select(hgu133plus2.db, 
+                                  rownames(tamaresis_top), 
+                                  c('SYMBOL')) |> 
+  dplyr::rename(gene_symbol = SYMBOL)
+  
 tamaresis_top_genes <- tamaresis_top |>
-  rownames_to_column(var='ID') |>
-  inner_join(tamaresis_probe_to_gene, by=c('ID')) |>
-  select(`Gene Symbol`)
+  rownames_to_column(var='probe_id') |>
+  inner_join(tamaresis_probe_to_gene, by=c('probe_id' = 'PROBEID')) |>
+  filter((abs(logFC) > 1.1 & adj.P.Val < 0.05))
+```
+
+# Sanity Checking
+```{r}
+# load top genes from Oskotsky paper to sanity check
+oskotsky_top_genes <- read_excel('data/oskotsky.xlsx', sheet="DvC_unstratified")
+oskotsky_top_genes_filt <- oskotsky_top_genes |>
+  filter((abs(`logFC (Control/Disease)`) > 1.1 & adj.P.Val < 0.05))
+```
+
+```{r}
+length(intersect(gabriel_top_genes$gene_symbol, oskotsky_top_genes_filt$gene_symbol))
+length(intersect(tamaresis_top_genes$gene_symbol, oskotsky_top_genes_filt$gene_symbol))
+length(intersect(tamaresis_top_genes$gene_symbol, gabriel_top_genes$gene_symbol))
+```
+
+# GSE51981 (Tamaresis) DEA raw data load
+```{r}
+# load raw CEL files
+# if (!dir.exists('data/GSE51981')) {
+#   untar('data/GSE51981_RAW.tar', exdir='data/GSE51981')
+# }
+
+# read and process data
+# tamaresis_celdata <- ReadAffy(filenames = list.celfiles('data/GSE51981', full.names=TRUE),
+#                               cdfname='hgu133plus2cdf')
+# tamaresis_proc_expr_data <- affy::rma(tamaresis_celdata)
+
+# reorder columns of expression data to match labels
+
+
+# reorder columns of expression data to match labels
+# tamaresis_expr_data_df <- as.data.frame(exprs(tamaresis_proc_expr_data))
+# colnames(tamaresis_expr_data_df) <- sub("_\\d+\\.CEL\\.gz", "", 
+#                                         colnames(as.data.frame(exprs(tamaresis_proc_expr_data))),
+#                                         ignore.case = TRUE)
+# tamaresis_expr_data_df <- tamaresis_expr_data_df |>
+#   dplyr::select(tamaresis_lbls$geo_accession)
 ```
 
