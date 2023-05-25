@@ -4,6 +4,6 @@
 *.RData
 *.Ruserdata
 *.html
-data
+# data
 .Rproj.user
 .DS_Store
