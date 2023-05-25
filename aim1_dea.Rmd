@@ -78,7 +78,7 @@ gabriel_probe_to_gene <- gabriel_expr_data |>
 gabriel_top_genes <- gabriel_top |>
   rownames_to_column(var='probe_id') |>
   inner_join(gabriel_probe_to_gene, by=c('probe_id')) |>
-  filter((abs(logFC) > 1.1 & adj.P.Val < 0.05))
+  filter((abs(logFC) > 0.5 & adj.P.Val < 0.05))
 ```
 
 # GSE51981 (Tamaresis) DEA
@@ -143,7 +143,7 @@ tamaresis_probe_to_gene <- select(hgu133plus2.db,
 tamaresis_top_genes <- tamaresis_top |>
   rownames_to_column(var='probe_id') |>
   inner_join(tamaresis_probe_to_gene, by=c('probe_id' = 'PROBEID')) |>
-  filter((abs(logFC) > 1.1 & adj.P.Val < 0.05))
+  filter((abs(logFC) > 0.5 & adj.P.Val < 0.05))
 ```
 
 # Sanity Checking
