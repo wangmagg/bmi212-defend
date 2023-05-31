@@ -1,0 +1,177 @@
+---
+title: "aim3_target_overlap"
+author: "Maggie Wang"
+date: "2023-05-31"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(here)
+library(tidyverse)
+library(qusage)
+library(readxl)
+library(org.Hs.eg.db)
+library(annotate)
+
+library(igraph)
+library(data.table)
+
+# compute drug-disease network
+source("../external_code/SAveRUNNER/code/src/script/lib/network/proximity/getGraph.R")
+source("../external_code/SAveRUNNER/code/src/script/lib/network/proximity/computeDegreeDistribution.R")
+source("../external_code/SAveRUNNER/code/src/script/lib/network/proximity/computeProximity.R")
+source("../external_code/SAveRUNNER/code/src/script/lib/network/proximity/computeMinimum.R")
+source("../external_code/SAveRUNNER/code/src/script/lib/network/proximity/computeRandomProximity.R")
+source("../external_code/SAveRUNNER/code/src/script/lib/network/proximity/selectRandomNodes.R")
+source("../external_code/SAveRUNNER/code/src/script/lib/network/proximity/computeStatistics.R")
+
+# adjust drug-disease association
+source("../external_code/SAveRUNNER/code/src/script/lib/network/similarity/computeSimilarity.R")
+source("../external_code/SAveRUNNER/code/src/script/lib/network/similarity/selectPval.R")
+source("../external_code/SAveRUNNER/code/src/script/lib/network/similarity/createAdjMatrix.R")
+source("../external_code/SAveRUNNER/code/src/script/lib/network/similarity/computeClustering.R")
+source("../external_code/SAveRUNNER/code/src/script/lib/network/similarity/computeClusterInfo.R")
+source("../external_code/SAveRUNNER/code/src/script/lib/network/similarity/createNewAdjMatrix.R")
+source("../external_code/SAveRUNNER/code/src/script/lib/network/similarity/computeNormalization.R")
+source("../external_code/SAveRUNNER/code/src/script/lib/network/similarity/createEdgeList.R")
+```
+
+```{r}
+# load interactome network
+interactome <- read.table("../external_code/SAveRUNNER/code/input_files/interactome_Feixiong2018.txt", 
+                           header = T, sep = '\t', check.names = F, quote = "")
+graph_info <- getGraph(interactome)
+```
+
+```{r}
+# load drug targets from animal models
+anim_tar_df <- as.data.frame(read_excel(here('data/validation_files/animal_clinical_targets.xlsx'),
+                                        sheet="animal_models")) |>
+  separate_longer_delim(target_gene_name, delim=',') |>
+  filter(!is.na(target_gene_name)) |>
+  mutate(target_gene_name = str_trim(target_gene_name))
+anim_tar_entrezid <- select(org.Hs.eg.db,
+                            keys=anim_tar_df$target_gene_name,
+                            columns=c('ENTREZID', 'SYMBOL'),
+                            keytype='SYMBOL') |>
+  distinct(SYMBOL, .keep_all=TRUE)
+anim_tar_df <- anim_tar_df |>
+  left_join(anim_tar_entrezid, by=c('target_gene_name' = 'SYMBOL'))
+
+# load drug targets from clinical trials
+clin_tar_df <- as.data.frame(read_excel(here('data/validation_files/animal_clinical_targets.xlsx'),
+                                        sheet="clinical_trials")) |>
+  separate_longer_delim(target_gene_name, delim=',') |>
+  filter(!is.na(target_gene_name)) |>
+  mutate(target_gene_name = str_trim(target_gene_name))
+
+clin_tar_entrezid <- select(org.Hs.eg.db,
+                            keys=clin_tar_df$target_gene_name,
+                            columns=c('ENTREZID', 'SYMBOL'),
+                            keytype='SYMBOL') |>
+  distinct(SYMBOL, .keep_all=TRUE)
+clin_tar_df <- clin_tar_df |>
+  left_join(clin_tar_entrezid, by=c('target_gene_name' = 'SYMBOL'))
+
+# separate into phase1+2, phase3+4, and failed clinical trials
+failed_statuses <- c('terminated', 'withdrawn', 'suspended', 'unknown')
+clin_tar_p12_ongoing_df <- clin_tar_df |>
+  filter((phase == 1 | phase == 2) & !(status %in% failed_statuses))
+clin_tar_p3plus_ongoing_df <- clin_tar_df |>
+  filter(phase >= 3 & !(status %in% failed_statuses))
+clin_tar_failed_df <- clin_tar_df |>
+  filter(status %in% failed_statuses)
+```
+
+```{r}
+# load results from GSPA 
+gspa_both_files <- list.files(path=here('data/gspa_output'),
+                         pattern='*_DSigDB_both.csv',
+                         full.names=TRUE,
+                         recursive=TRUE)
+gspa_up_files <- list.files(path=here('data/gspa_output'),
+                         pattern='*_DSigDB_up.csv',
+                         full.names=TRUE,
+                         recursive=TRUE)
+gspa_files <- c(gspa_both_files, gspa_up_files)
+
+dsigdb_all <- read.gmt(here('data/dsigdb_files/DSigDB_All.gmt'))
+```
+
+```{r}
+get_overlap <- function(query_target_sym_list, query_target_id_list, reference_target_sym, reference_target_id, graph_info) {
+  n_overlap <- as.data.frame(lapply(query_target_sym_list,
+                                    function(l) {length(intersect(l, reference_target_sym))})) |>
+    pivot_longer(everything(), names_to=c('drug'), values_to='raw_overlap')
+
+  proxim <- as.data.frame(lapply(query_target_id_list,
+                                 function(l) {computeProximity(na.omit(l), na.omit( reference_target_id), graph_info)})) |>
+     pivot_longer(everything(), names_to=c('drug'), values_to='proximity')
+    
+  res <- n_overlap |>
+    inner_join(proxim, by=c('drug'))
+  
+  return (res)
+}
+```
+
+```{r}
+# compute overlap and proximity scores for each drug candidate
+score_all_datasets <- c()
+
+for (f in gspa_files) {
+  gs_score_df <- read.csv(f)
+  gs_hit_df <- gs_score_df |>
+    filter(P.value < 0.05 & FDR < 0.5)
+  if (nrow(gs_hit_df) == 0) {
+    message('No significant results found for: ', f)
+    next
+  }
+  
+  gs_target_sym_list <- dsigdb_all[gs_hit_df$Gene.Set]
+  gs_target_id_list <- lapply(gs_target_sym_list, 
+                              function(l) {
+                                select(org.Hs.eg.db,
+                                       keys=l,
+                                       columns=c('ENTREZID', 'SYMBOL'),
+                                       keytype='SYMBOL') |> dplyr::pull(ENTREZID)})
+  
+  # overlap in targets with animal models
+  score_anim <- get_overlap(gs_target_sym_list, gs_target_id_list, 
+                            anim_tar_df$target_gene_name, anim_tar_df$ENTREZID, 
+                            graph_info)
+  score_anim$category <- 'animal'
+  
+  # overlap in targets with ongoing phase 1+2 trials
+  score_clin_p12 <- get_overlap(gs_target_sym_list, gs_target_id_list, 
+                                clin_tar_p12_ongoing_df$target_gene_name, clin_tar_p12_ongoing_df$ENTREZID, 
+                                graph_info)
+  score_clin_p12$category <- 'clinical_p12'
+  
+  # overlap in targets with ongoing phase 3+ trials
+  score_clin_p3plus <- get_overlap(gs_target_sym_list, gs_target_id_list, 
+                                   clin_tar_p3plus_ongoing_df$target_gene_name, clin_tar_p3plus_ongoing_df$ENTREZID, 
+                                   graph_info)
+  score_clin_p3plus$category <- 'clinical_p3plus'
+  
+  # overlap in targets with failed trials
+  score_clin_failed <- get_overlap(gs_target_sym_list, gs_target_id_list, 
+                                   clin_tar_failed_df$target_gene_name, clin_tar_failed_df$ENTREZID, 
+                                   graph_info)
+  score_clin_failed$category <- 'clinical_failed'
+  
+  score_all_criteria <- rbind(score_anim, score_clin_p12, score_clin_p3plus, score_clin_failed)
+  score_all_criteria$dataset <- strsplit(basename(f), '\\.')[[1]][1]
+  
+  score_all_datasets <- bind_rows(score_all_datasets, score_all_criteria)
+}
+```
+```{r}
+if (!dir.exists(here('data/score_output'))) {
+  dir.create(here('data/score_output'))
+}
+write.csv(score_all_datasets, file=here('data/score_output/anim_clin_target_overlap.csv'))
+```
+

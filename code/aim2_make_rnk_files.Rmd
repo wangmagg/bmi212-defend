@@ -1,6 +1,7 @@
 ---
 title: "Make rnk files"
-output: html_notebook
+output:
+html_notebook: default
 ---
 
 ```{r}
@@ -12,8 +13,8 @@ library(tidyverse)
 # Read in diff exp output
 # assumes a data/diff_exp_output folder 
 
-gse_files <- list.files(path=here("data/diff_exp_output")", 
-                        pattern="*.csv",
+gse_files <- list.files(path=here("data/diff_exp_output"), 
+                        pattern="*fc-0.50_p-0.05.csv",
                         full.names=TRUE)
 ```
 
@@ -21,10 +22,18 @@ gse_files <- list.files(path=here("data/diff_exp_output")",
 # Loop over and reformat for gspa 
 for (f in gse_files) {
   f_name <- strsplit(strsplit(f, "/")[[1]][12], "_")[[1]][1]
+  df_upreg <- read_csv(f) %>% 
+    filter(logFC > 0) %>% # get positive FC for upregulated genes
+    group_by(gene_symbol) %>% # need one value per gene symbol and unclear which illumina probe is better
+    summarise(mean_logFC = mean(logFC)) %>%
+    write_tsv(paste(here("data/rnk_files"),
+                  paste(f_name, "upreg.rnk", sep="_"), 
+                  sep="/"),
+              col_names = FALSE) # needs to be tab-delimited no header
   df <- read_csv(f) %>% 
     group_by(gene_symbol) %>% # need one value per gene symbol and unclear which illumina probe is better
     summarise(mean_logFC = mean(logFC)) %>%
-    write_tsv(paste(here("/data/rnk_files"),
+    write_tsv(paste(here("data/rnk_files"),
                   paste(f_name, ".rnk", sep=""), 
                   sep="/"),
               col_names = FALSE) # needs to be tab-delimited no header
