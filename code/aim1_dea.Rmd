@@ -77,8 +77,17 @@ gabriel_probe_to_gene <- gabriel_expr_data |>
 
 gabriel_top_genes <- gabriel_top |>
   rownames_to_column(var='probe_id') |>
-  inner_join(gabriel_probe_to_gene, by=c('probe_id')) |>
-  filter((abs(logFC) > 0.5 & adj.P.Val < 0.05))
+  inner_join(gabriel_probe_to_gene, by=c('probe_id'))
+
+gabriel_top_genes_filt <- gabriel_top_genes |>
+  filter((abs(logFC) > 1.1 & adj.P.Val < 0.05))
+
+if (!dir.exists('res')) {
+  dir.create('res')
+}
+
+write.csv(gabriel_top_genes, 'res/GSE141549_all_genes.csv')
+write.csv(gabriel_top_genes_filt, 'res/GSE141549_top_genes.csv')
 ```
 
 # GSE51981 (Tamaresis) DEA
@@ -92,13 +101,13 @@ tamaresis_geo_plat1[["endometriosis/no endometriosis:ch1"]] <-
 ```
 
 ```{r}
-# get sample phenotypes (endometriosis vs non-endometriosis)
+# extract sample phenotypes (endometriosis vs non-endometriosis)
 tamaresis_lbls <- pData(tamaresis_geo_plat1) |> 
   dplyr::select(geo_accession, `endometriosis/no endometriosis:ch1`) |>
   drop_na(`endometriosis/no endometriosis:ch1`)
 tamaresis_design <- model.matrix( ~tamaresis_lbls[['endometriosis/no endometriosis:ch1']])
 
-# get expression data
+# extract expression data
 tamaresis_expr_data_df <- as.data.frame(exprs(tamaresis_geo_plat1)) |>
   dplyr::select(tamaresis_lbls$geo_accession)
 ```
@@ -142,8 +151,17 @@ tamaresis_probe_to_gene <- select(hgu133plus2.db,
   
 tamaresis_top_genes <- tamaresis_top |>
   rownames_to_column(var='probe_id') |>
-  inner_join(tamaresis_probe_to_gene, by=c('probe_id' = 'PROBEID')) |>
-  filter((abs(logFC) > 0.5 & adj.P.Val < 0.05))
+  inner_join(tamaresis_probe_to_gene, by=c('probe_id' = 'PROBEID'))
+
+tamaresis_top_genes_filt <- tamaresis_top_genes |>
+  filter((abs(logFC) > 1.1 & adj.P.Val < 0.05))
+
+if (!dir.exists('res')) {
+  dir.create('res')
+}
+
+write.csv(tamaresis_top_genes, 'res/GSE51981_all_genes.csv')
+write.csv(tamaresis_top_genes_filt, 'res/GSE51981_top_genes.csv')
 ```
 
 # Sanity Checking
