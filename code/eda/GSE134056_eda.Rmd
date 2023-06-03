@@ -1,0 +1,144 @@
+---
+title: "Normalize GSE134056 data"
+output: html_notebook
+---
+
+## Setup
+
+```{r}
+library(here)
+library(tidyverse)
+library(ggcorrplot)
+library(DESeq2)
+```
+
+
+Note. Followed [this tutorial](https://hbctraining.github.io/DGE_workshop/lessons/02_DGE_count_normalization.html) and [this tutorial](https://bioconductor.org/packages/release/bioc/vignettes/DESeq2/inst/doc/DESeq2.html#data-transformations-and-visualization) by DESeq2 authors.
+
+## Load in data
+
+
+Originally downloaded from the data set's [GEO page](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE134056).
+
+### Data matrix 
+
+```{r}
+gse134056_df <- read_table(here("data/raw/GSE134056_countdata_rnaseq.txt")) %>% 
+  column_to_rownames("gene_id")
+```
+
+```{r}
+dim(gse134056_df)
+```
+
+```{r}
+head(gse134056_df)
+```
+
+### Metadata df 
+
+```{r}
+meta_df <- read_tsv(here("data/raw/gse134056_meta_df.txt")) %>% 
+  mutate(sample_class_id = paste(sample_class, sample_id, sep="_")) %>% 
+  column_to_rownames("sample_id")
+
+head(meta_df)
+```
+
+
+Check it matches matrix: 
+
+```{r}
+all(colnames(gse134056_df) == rownames(meta_df))
+```
+
+## Correlate samples
+
+```{r}
+gse134056_df_for_cor <- gse134056_df %>% as.matrix()
+colnames(gse134056_df_for_cor) <- meta_df$sample_class_id
+corr_mat <- cor(gse134056_df_for_cor, method="spearman")
+ggcorrplot(corr_mat,  
+           hc.order = TRUE, 
+           outline.color = "white",
+           type="upper",
+           lab=TRUE, 
+           lab_size = 2)
+```
+
+## Create DESeq2 object 
+
+```{r}
+dds <- DESeqDataSetFromMatrix(countData = as.matrix(gse134056_df),
+                              colData = meta_df,
+                              design= ~sample_class)
+dds$sample_class <- relevel(dds$sample_class, ref = "control") # set reference to control
+```
+
+```{r}
+# pre-filter low count genes 
+# While it is not necessary to pre-filter low count genes before running the DESeq2 functions, there are two reasons which make pre-filtering useful: by removing rows in which there are very few reads, we reduce the memory size of the dds data object, and we increase the speed of the transformation and testing functions within DESeq2. It can also improve visualizations, as features with no information for differential expression are not plotted.
+keep <- rowSums(counts(dds)) >= 10
+dds <- dds[keep,]
+```
+
+
+## Differential expression analysis 
+
+```{r}
+dds <- DESeq(dds)
+res <- results(dds)
+```
+
+
+```{r}
+significant_res <- res %>% 
+  as.data.frame() %>% 
+  filter(log2FoldChange > 1.1 & padj < 0.05)
+```
+
+
+```{r}
+significant_res <- significant_res %>% 
+  rownames_to_column(var="gene_id")
+```
+
+
+## Transform data to visualize samples 
+
+
+Note. (from [tutorial #2](https://bioconductor.org/packages/release/bioc/vignettes/DESeq2/inst/doc/DESeq2.html#data-transformations-and-visualization)). "The two functions, vst and rlog have an argument blind, for whether the transformation should be blind to the sample information specified by the design formula. When blind equals TRUE (the default), the functions will re-estimate the dispersions using only an intercept. This setting should be used in order to compare samples in a manner wholly unbiased by the information about experimental groups, for example to perform sample QA (quality assurance) as demonstrated below. However, blind dispersion estimation is not the appropriate choice if one expects that many or the majority of genes (rows) will have large differences in counts which are explainable by the experimental design, and one wishes to transform the data for downstream analysis. In this case, using blind dispersion estimation will lead to large estimates of dispersion, as it attributes differences due to experimental design as unwanted noise, and will result in overly shrinking the transformed values towards each other. By setting blind to FALSE, the dispersions already estimated will be used to perform transformations, or if not present, they will be estimated using the current design formula. Note that only the fitted dispersion estimates from mean-dispersion trend line are used in the transformation (the global dependence of dispersion on mean for the entire experiment). So setting blind to FALSE is still for the most part not using the information about which samples were in which experimental group in applying the transformation."
+
+```{r}
+vsd <- vst(dds, blind=FALSE)
+```
+
+```{r}
+sampleDists <- dist(t(assay(vsd)))
+library("RColorBrewer")
+sampleDistMatrix <- as.matrix(sampleDists)
+rownames(sampleDistMatrix) <- vsd$sample_class_id
+colnames(sampleDistMatrix) <- NULL
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+pheatmap(sampleDistMatrix,
+         clustering_distance_rows=sampleDists,
+         clustering_distance_cols=sampleDists,
+         col=colors)
+```
+
+```{r}
+plotPCA(vsd, intgroup="sample_class")
+```
+
+
+```{r}
+head(assay(vsd),3)
+```
+
+
+```{r}
+ntd <- normTransform(dds)
+
+pheatmap(assay(ntd), cluster_rows=TRUE, show_rownames=FALSE, cluster_cols=TRUE)
+```
+
