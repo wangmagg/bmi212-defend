@@ -21,11 +21,13 @@ This project is structured as an RProject; you can activate the relevant environ
   - `aim3_subscore_similarity.Rmd`: Code to compute target similarity subscore. Author: MW
   - `aim3_subscore_prr.Rmd`: Code to compute average PRR. Author: MW
   - `aim3_aggscore.Rmd`: Code to compute weighted sum of subscores and produce aggregate score for each candidate. Author: MW
+  - ** All of Us EHR validation scripts can be provided upon request (adigoyal@stanford.edu) Author: AG **
 * Data: Processed data sets used in analyses (all are derived from publicly available data) 
   - `diff_exp_output/`: Output of differential expression analyses 
   - `gspa_output/`: Output of GSPA analyses 
   - `rnk_files/`: .rnk files used for queries 
   - `score_output/`: Output from scoring (both subscores and aggregate scores)
+  - EHR data provided by All of Us
 * `renv/`: RProject files for R environment 
 * `renv.lock`: Lock file for R environment 
 * `.gitignore`
