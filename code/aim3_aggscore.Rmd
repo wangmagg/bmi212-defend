@@ -1,0 +1,201 @@
+---
+title: "aim3_scoring"
+author: "Maggie Wang"
+date: "2023-06-02"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(here)
+library(readxl)
+library(tidyverse)
+library(ggplot2)
+
+if (!dir.exists(here('data/score_output'))) {
+  dir.create(here('data/score_output'))
+}
+```
+
+# Data loading
+## Load subscores 
+```{r}
+overlap_df <- read.csv(here('data/score_output/metric_similarity.csv'))
+side_effect_df <- read.csv(here('data/score_output/metric_prr.csv'))
+ehr_df <- read_excel(here('data/score_output/metric_ehr.xlsx'))
+
+overlap_reformat_df <- overlap_df |> 
+  dplyr::select(drug, reference, proximity, raw_overlap) |> # exclude pval from evidence score for now
+  mutate(drug = tolower(drug)) |>
+  pivot_wider(names_from=reference, values_from=c(raw_overlap, proximity)) 
+
+side_effect_reformat_df <- side_effect_df |>
+  dplyr::select(drug, mean_PRR) |> 
+  mutate(drug = tolower(drug)) 
+
+ehr_reformat_df <- ehr_df |>
+  dplyr::select(drug, total_taking, endo_taking_excl_window) |> 
+  mutate(drug = tolower(drug))
+
+criteria_df <- overlap_reformat_df |>
+  left_join(side_effect_reformat_df, by=c('drug')) |>
+  left_join(ehr_reformat_df, by=c('drug')) |>
+  pivot_longer(!drug, names_to='criteria', values_to='value')
+```
+
+## Load weighting and imputation schemes
+```{r}
+weights_unif <- read_excel(here('data/score_input/weighting_schemes.xlsx'), sheet='Uniform_Weights')
+weights_vary <- read_excel(here('data/score_input/weighting_schemes.xlsx'), sheet='Varying_Weights')
+impute_mean <- read_excel(here('data/score_input/weighting_schemes.xlsx'), sheet='Mean_Impute')
+impute_worst <- read_excel(here('data/score_input/weighting_schemes.xlsx'), sheet='Worst_Impute')
+
+scheme_unif_mean <- weights_unif |> 
+  inner_join(impute_mean, by=c('criteria')) |>
+  mutate(scheme = 'uniform_impute_mean')
+scheme_unif_worst <- weights_unif |>
+  inner_join(impute_worst, by=c('criteria')) |>
+  mutate(scheme = 'uniform_impute_worst')
+scheme_vary_mean <- weights_vary |>
+  inner_join(impute_mean, by=c('criteria')) |>
+  mutate(scheme = 'varying_impute_mean')
+scheme_vary_worst <- weights_vary |>
+  inner_join(impute_worst, by=c('criteria')) |>
+  mutate(scheme = 'varying_impute_worst')
+
+schemes_df <- bind_rows(scheme_unif_mean, scheme_unif_worst, scheme_vary_mean, scheme_vary_worst) |>
+  group_by(scheme) |>
+  mutate(standardized_weight = weight / sum(weight^2))
+
+```
+
+
+# Run aggregate score computation 
+```{r}
+scores_df <- criteria_df |>
+  left_join(schemes_df, by=c('criteria')) |>
+  group_by(scheme, criteria) |>
+  mutate(value = 
+           case_when(
+             is.na(value) & impute_value == 'mean' ~ mean(value, na.rm=TRUE),
+             is.na(value) & impute_value == 'max' ~ max(value, na.rm=TRUE),
+             is.na(value) & impute_value == 'min' ~ min(value, na.rm=TRUE),
+             is.na(value) & impute_value == 'zero' ~ 0,
+             TRUE ~ value),
+         standardized_value = 
+           case_when(
+             sd(value) == 0 ~ value,
+             TRUE ~ (value - mean(value)) / sd(value)),
+         weighted_value = standardized_weight * standardized_value) |>
+  dplyr::select(-impute_value)
+write.csv(scores_df, here('data/score_output/indiv_criteria_scores.csv'))
+
+summed_scores_df <- scores_df |>
+  group_by(drug, scheme) |>
+  summarise(score = sum(weighted_value)) |>
+  arrange(desc(score)) |>
+  ungroup() |>
+  group_by(scheme) |>
+  mutate(rank = 1:n()) 
+write.csv(summed_scores_df, here('data/score_output/summed_scores.csv'))
+```
+
+# Make plots
+## Plot weights
+```{r}
+criteria_lbls <- list("proximity_other_cands" = "OtherCands-Prox",
+                      "raw_overlap_other_cands" = "OtherCands-Ovlp",
+                      "proximity_animal" = "Animal-Prox",
+                      "raw_overlap_animal" = "Animal-Ovlp",
+                      "proximity_clinical_p12" = "EarlyClin-Prox",
+                      "raw_overlap_clinical_p12" = "EarlyClin-Ovlp",
+                      "proximity_clinical_p3plus" = "LateClin-Prox",
+                      "raw_overlap_clinical_p3plus" = "LateClin-Ovlp",
+                      "proximity_clinical_failed" = "FailedClin-Prox",
+                      "raw_overlap_clinical_failed" = "FailedClin-Ovlp",
+                      "endo_taking_excl_window" = "EHR-Endo",
+                      "total_taking" = "EHR-Total",
+                      "mean_PRR" = "SideEffects-PRR",
+                      "score" = "Score")
+
+criteria_order <- names(criteria_lbls)
+
+drug_lbls <- list("pregabalin" = "PRE",
+                  "gabapentin" = "GAB",
+                  "homocastasterone_ctd_00002741" = "HOM",
+                  "brassinolide_ctd_00001097" = "BRA",
+                  "3-methyladenine_ctd_00001217" = "3-MET",
+                  "1-trichloromethyl-1,2,3,4-tetrahydro-beta-carboline_ctd_00002689" = "1-TRI")
+drug_order <- names(drug_lbls)
+```
+
+```{r}
+weights_vary$criteria_abbrev <- factor(weights_vary$criteria, level=criteria_order)
+weights_vary$scheme <- 'varying'
+weights_unif$criteria_abbrev <- factor(weights_unif$criteria, level=criteria_order)
+weights_unif$scheme <- 'uniform'
+weights <- bind_rows(weights_vary, weights_unif)
+
+ggplot(weights, aes(x=criteria_abbrev, y=weight, fill=weight)) + 
+  geom_col(color='black') +
+  scale_fill_gradient2(low = "#075AFF",
+                       mid = "#FFFFCC",
+                       high = "#FF0000",
+                       name='Weight') + 
+  scale_x_discrete(labels=criteria_lbls, limits=rev) +
+  coord_flip() +
+  xlab('Criteria') +
+  ylab('Weight') +
+  facet_wrap(vars(scheme)) +
+  theme(text = element_text(size = 16))    
+
+ggsave(here('figs/weights_bar.png'))
+
+```
+## Plot score heatmaps
+```{r}
+scores_df$drug <- factor(scores_df$drug, level=drug_order)
+scores_df$criteria <- factor(scores_df$criteria, level=criteria_order)
+scores_df$scheme <- factor(scores_df$scheme, level=c('varying_impute_worst', 'varying_impute_mean', 'uniform_impute_worst', 'uniform_impute_mean'))
+
+ggplot(scores_df, aes(criteria, drug, fill=weighted_value)) + 
+  geom_tile(color='black') + 
+  scale_fill_gradient2(low = "#075AFF",
+                       mid = "#FFFFCC",
+                       high = "#FF0000") + 
+  scale_x_discrete(labels=criteria_lbls) +
+  scale_y_discrete(labels=drug_lbls, limits=rev) + 
+  theme(axis.text.x = element_text(angle = 90, vjust=0.5, hjust=1),
+        legend.title = element_blank()) +
+  facet_wrap(vars(scheme))
+
+ggsave(here('figs/score_heatmaps.png'))
+
+```
+## Plot score and rank lineplots
+```{r}
+summed_scores_df$drug <- factor(summed_scores_df$drug, level=drug_order)
+summed_scores_df$scheme <- factor(summed_scores_df$scheme, level=c('varying_impute_worst', 
+                                                                   'varying_impute_mean', 
+                                                                   'uniform_impute_worst', 
+                                                                   'uniform_impute_mean'))
+
+ggplot(summed_scores_df, aes(x=scheme, y=score, group=drug, color=drug)) +
+  geom_line() +
+  geom_point() +
+  scale_color_discrete(labels=drug_lbls)
+
+ggsave(here('figs/score_lineplot.png'))
+
+ggplot(summed_scores_df, aes(x=scheme, y=rank, group=drug, color=drug)) +
+  geom_line() +
+  geom_point() +
+  scale_y_reverse(breaks=1:6) +
+  scale_color_discrete(labels=drug_lbls) 
+
+ggsave(here('figs/rank_lineplot.png'))
+
+```
+
+

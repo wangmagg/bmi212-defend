@@ -1,0 +1,229 @@
+---
+title: "aim3_target_overlap"
+author: "Maggie Wang"
+date: "2023-05-31"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(here)
+library(tidyverse)
+library(qusage)
+library(readxl)
+library(org.Hs.eg.db)
+library(annotate)
+
+library(igraph)
+library(data.table)
+```
+
+```{r setup, include=FALSE}
+# compute drug-disease network
+source("../external_code/SAveRUNNER/code/src/script/lib/network/proximity/getGraph.R")
+source("../external_code/SAveRUNNER/code/src/script/lib/network/proximity/computeDegreeDistribution.R")
+source("../external_code/SAveRUNNER/code/src/script/lib/network/proximity/computeProximity.R")
+source("../external_code/SAveRUNNER/code/src/script/lib/network/proximity/computeMinimum.R")
+source("../external_code/SAveRUNNER/code/src/script/lib/network/proximity/computeRandomProximity.R")
+source("../external_code/SAveRUNNER/code/src/script/lib/network/proximity/selectRandomNodes.R")
+source("../external_code/SAveRUNNER/code/src/script/lib/network/proximity/computeStatistics.R")
+```
+
+# Function definitions
+```{r}
+get_similarity_with_ref <- function(query_target_sym_list, query_target_id_list, reference_target_sym, 
+                        reference_target_id, graph_info, dataset_name, reference_name) {
+  n_overlap <- lapply(query_target_sym_list,
+                      function(l) {length(intersect(l, reference_target_sym)) / 
+                          length(union(l, reference_target_sym))})
+  n_overlap <- as.data.frame(do.call(rbind, n_overlap))
+  colnames(n_overlap) <- c('raw_overlap')
+  n_overlap <- n_overlap |> rownames_to_column(var='drug')
+
+  proxim <- lapply(query_target_id_list,
+                   function(l) {
+                     prox <- computeProximity(na.omit(l), na.omit(reference_target_id), graph_info)
+                     query_deg_distr <- computeDegreeDistribution(na.omit(l), graph_info) 
+                     ref_deg_distr <- computeDegreeDistribution(na.omit(reference_target_id), graph_info)
+                     random_distr_prox <- computeRandomProximity(query_deg_distr,ref_deg_distr, graph_info)
+                     pval <- computeStatistics(random_distr_prox, prox)
+                     c(prox, pval)})
+  proxim <- as.data.frame(do.call(rbind, proxim))
+  colnames(proxim) <- c('proximity', 'proximity_pval')
+  proxim <- proxim |> rownames_to_column(var='drug')
+  
+  n_overlap |> 
+    inner_join(proxim, by=c('drug')) |> 
+    mutate(dataset = dataset_name,
+           reference = reference_name)
+}
+
+get_concordance <- function(query_target_id_list, query_to_dataset_name, graph_info) {
+  all_jacc <- c()
+  all_prox <- c()
+  
+  for (drug in names(query_target_id_list)) {
+    query_id <- query_target_id_list[[drug]]
+    ref_id <- unlist(query_target_id_list[names(query_target_id_list) != drug])
+    
+    jacc <- length(intersect(query_id, ref_id)) / length(union(query_id, ref_id))
+    all_jacc <- rbind(all_jacc, c(drug, jacc))
+    
+    prox <- computeProximity(na.omit(query_id), na.omit(ref_id), graph_info)
+    query_deg_distr <- computeDegreeDistribution(na.omit(query_id), graph_info) 
+    ref_deg_distr <- computeDegreeDistribution(na.omit(ref_id), graph_info)
+    random_distr_prox <- computeRandomProximity(query_deg_distr,ref_deg_distr, graph_info)
+    pval <- computeStatistics(random_distr_prox, prox)
+    all_prox <- rbind(all_prox, c(drug, prox, pval))
+  }
+  
+  all_jacc <- as.data.frame(all_jacc)
+  all_prox <- as.data.frame(all_prox)
+  colnames(all_jacc) <- c('drug', 'raw_overlap')
+  colnames(all_prox) <- c('drug', 'proximity', 'proximity_pval')
+  
+  all_jacc |> 
+    left_join(all_prox, by=c('drug')) |>
+    left_join(query_to_dataset_name, by=c('drug')) |>
+    mutate(reference = 'other_cands', 
+           raw_overlap = as.numeric(raw_overlap), 
+           proximity = as.numeric(proximity),
+           proximity_pval = as.numeric(proximity_pval))
+}
+```
+
+# Data loading
+## Load interactome 
+```{r}
+# load interactome network
+interactome <- read.table("../external_code/SAveRUNNER/code/input_files/interactome_Feixiong2018.txt", 
+                           header = T, sep = '\t', check.names = F, quote = "")
+graph_info <- getGraph(interactome)
+```
+
+## Load animal model and clinical trial information
+```{r}
+# load drug targets from animal models
+anim_tar_df <- as.data.frame(read_excel(here('data/score_input/animal_clinical_targets.xlsx'),
+                                        sheet="animal_models")) |>
+  separate_longer_delim(target_gene_name, delim=',') |>
+  filter(!is.na(target_gene_name)) |>
+  mutate(target_gene_name = str_trim(target_gene_name))
+anim_tar_entrezid <- select(org.Hs.eg.db,
+                            keys=anim_tar_df$target_gene_name,
+                            columns=c('ENTREZID', 'SYMBOL'),
+                            keytype='SYMBOL') |>
+  distinct(SYMBOL, .keep_all=TRUE)
+anim_tar_df <- anim_tar_df |>
+  left_join(anim_tar_entrezid, by=c('target_gene_name' = 'SYMBOL'))
+
+# load drug targets from clinical trials
+clin_tar_df <- as.data.frame(read_excel(here('data/score_input/animal_clinical_targets.xlsx'),
+                                        sheet="clinical_trials")) |>
+  separate_longer_delim(target_gene_name, delim=',') |>
+  filter(!is.na(target_gene_name)) |>
+  mutate(target_gene_name = str_trim(target_gene_name))
+
+clin_tar_entrezid <- select(org.Hs.eg.db,
+                            keys=clin_tar_df$target_gene_name,
+                            columns=c('ENTREZID', 'SYMBOL'),
+                            keytype='SYMBOL') |>
+  distinct(SYMBOL, .keep_all=TRUE)
+clin_tar_df <- clin_tar_df |>
+  left_join(clin_tar_entrezid, by=c('target_gene_name' = 'SYMBOL'))
+
+# separate into phase1+2, phase3+4, and failed clinical trials
+failed_statuses <- c('terminated', 'withdrawn', 'suspended', 'unknown')
+clin_tar_p12_ongoing_df <- clin_tar_df |>
+  filter((phase == 1 | phase == 2) & !(status %in% failed_statuses))
+clin_tar_p3plus_ongoing_df <- clin_tar_df |>
+  filter(phase >= 3 & !(status %in% failed_statuses))
+clin_tar_failed_df <- clin_tar_df |>
+  filter(status %in% failed_statuses)
+```
+
+## Load GSPA output
+```{r}
+# load results from GSPA 
+gspa_both_files <- list.files(path=here('data/gspa_output'),
+                         pattern='*_DSigDB_both.csv',
+                         full.names=TRUE,
+                         recursive=TRUE)
+gspa_up_files <- list.files(path=here('data/gspa_output'),
+                         pattern='*_DSigDB_up.csv',
+                         full.names=TRUE,
+                         recursive=TRUE)
+gspa_files <- c(gspa_both_files, gspa_up_files)
+
+dsigdb_all <- read.gmt(here('data/score_input/DSigDB_All.gmt'))
+```
+
+
+# Run similarity score computation
+```{r}
+set.seed(42)
+
+sim_all_datasets <- c()
+target_id_all_datasets <- list()
+
+# compute overlap and proximity to reference drugs for each drug candidate
+for (f in gspa_files) {
+  dataset_name <- strsplit(basename(f), '\\.')[[1]][1]
+  
+  # get significantly enriched gene sets
+  gs_score_df <- read.csv(f)
+  gs_hit_df <- gs_score_df |>
+    filter(P.value < 0.05 & FDR < 0.5)
+  if (nrow(gs_hit_df) == 0) {
+    message('No significant results found for: ', f)
+    next
+  }
+  
+  # get genes in gene sets
+  gs_target_sym_list <- dsigdb_all[gs_hit_df$Gene.Set]
+  gs_target_id_list <- lapply(gs_target_sym_list, 
+                              function(l) {
+                                select(org.Hs.eg.db,
+                                       keys=l,
+                                       columns=c('ENTREZID', 'SYMBOL'),
+                                       keytype='SYMBOL') |> dplyr::pull(ENTREZID)})
+  
+  # overlap in targets with animal models
+  sim_anim <- get_similarity_with_ref(gs_target_sym_list, gs_target_id_list, 
+                                        anim_tar_df$target_gene_name, anim_tar_df$ENTREZID, 
+                                        graph_info, dataset_name, 'animal')
+  
+  # overlap in targets with ongoing phase 1+2 trials
+  sim_clin_p12 <- get_similarity_with_ref(gs_target_sym_list, gs_target_id_list, 
+                                            clin_tar_p12_ongoing_df$target_gene_name, clin_tar_p12_ongoing_df$ENTREZID, 
+                                            graph_info, dataset_name, 'clinical_p12')
+  
+  # overlap in targets with ongoing phase 3+ trials
+  sim_clin_p3plus <- get_similarity_with_ref(gs_target_sym_list, gs_target_id_list, 
+                                               clin_tar_p3plus_ongoing_df$target_gene_name, clin_tar_p3plus_ongoing_df$ENTREZID, 
+                                               graph_info, dataset_name, 'clinical_p3plus')
+  
+  # overlap in targets with failed trials
+  sim_clin_failed <- get_similarity_with_ref(gs_target_sym_list, gs_target_id_list, 
+                                               clin_tar_failed_df$target_gene_name, clin_tar_failed_df$ENTREZID, 
+                                               graph_info, dataset_name, 'clinical_failed')
+  
+  sim_all_refs <- rbind(sim_anim, sim_clin_p12, sim_clin_p3plus, sim_clin_failed)
+  sim_all_datasets <- bind_rows(sim_all_datasets, sim_all_refs)
+  target_id_all_datasets <- append(target_id_all_datasets, gs_target_id_list)
+}
+
+# remove gabapentin enacarbil since it is equivalent to gabapentin
+target_id_all_datasets <- target_id_all_datasets[names(target_id_all_datasets) != 'Gabapentin enacarbil']
+sim_all_datasets <- sim_all_datasets |> filter(drug != 'Gabapentin enacarbil')
+
+drug_to_dataset_name <- sim_all_datasets |> 
+  distinct(drug, dataset)
+
+# compute concordance of drug targets with other candidates' targets
+concord_df <- get_concordance(target_id_all_datasets, drug_to_dataset_name, graph_info)
+sim_concord_all_datasets <- bind_rows(sim_all_datasets, concord_df)
+
+write.csv(sim_concord_all_datasets, file=here('data/score_output/metric_similarity.csv'), row.names=FALSE)
+```

@@ -1,0 +1,45 @@
+---
+title: "aim3_side_effects"
+author: "Maggie Wang"
+date: "2023-06-02"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readxl)
+```
+
+# Data loading
+```{r}
+offsides_df <- read.csv(here('data/score_input/OFFSIDES.csv'))
+sider_df <- read_excel(here('data/score_input/sider.xlsx'))
+candidate_cui <- read.csv(here('data/score_input/candidate_rxnorm_cui.csv'))
+candidate_cui$rxnorm_cui <- as.character(candidate_cui$rxnorm_cui)
+sider_df$rxnorm_cui <- as.character(sider_df$rxnorm_cui)
+```
+
+# Run average PRR computation
+```{r}
+candidate_offsides_prr <- offsides_df |>
+  dplyr::rename(rxnorm_cui = drug_rxnorn_id, drug = drug_concept_name) |>
+  inner_join(candidate_cui, by=c('drug', 'rxnorm_cui')) |>
+  group_by(drug, rxnorm_cui) |>
+  summarise(mean_PRR = mean(as.numeric(PRR), na.rm=TRUE)) |>
+  mutate(drug = tolower(drug)) |> 
+  dplyr::select(drug, rxnorm_cui, mean_PRR)
+
+candidate_sider_prr <- sider_df |>
+  group_by(drug, rxnorm_cui) |>
+  summarise(mean_PRR = mean(PRR, na.rm=TRUE))  |>
+  mutate(drug = tolower(drug)) |> 
+  dplyr::select(drug, rxnorm_cui, mean_PRR)
+
+
+candidate_effects <- bind_rows(candidate_offsides_prr, candidate_sider_prr) |>
+  group_by(drug, rxnorm_cui) |>
+  summarise(mean_PRR = mean(mean_PRR, na.rm=TRUE))
+
+write.csv(candidate_effects, here('data/score_output/metric_prr.csv'), row.names=FALSE)
+```
+
