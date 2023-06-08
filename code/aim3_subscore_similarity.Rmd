@@ -17,10 +17,15 @@ library(annotate)
 
 library(igraph)
 library(data.table)
+
+if (!dir.exists(here('data/score_output'))) {
+  dir.create(here('data/score_output'))
+}
 ```
 
+# Load SAveRUNNER code for computing network proximity
 ```{r setup, include=FALSE}
-# compute drug-disease network
+# SAveRUNNer repository can be found here: https://github.com/sportingCode/SAveRUNNER
 source("../external_code/SAveRUNNER/code/src/script/lib/network/proximity/getGraph.R")
 source("../external_code/SAveRUNNER/code/src/script/lib/network/proximity/computeDegreeDistribution.R")
 source("../external_code/SAveRUNNER/code/src/script/lib/network/proximity/computeProximity.R")
@@ -30,7 +35,7 @@ source("../external_code/SAveRUNNER/code/src/script/lib/network/proximity/select
 source("../external_code/SAveRUNNER/code/src/script/lib/network/proximity/computeStatistics.R")
 ```
 
-# Function definitions
+# Function definitions 
 ```{r}
 get_similarity_with_ref <- function(query_target_sym_list, query_target_id_list, reference_target_sym, 
                         reference_target_id, graph_info, dataset_name, reference_name) {
@@ -158,7 +163,6 @@ gspa_files <- c(gspa_both_files, gspa_up_files)
 
 dsigdb_all <- read.gmt(here('data/score_input/DSigDB_All.gmt'))
 ```
-
 
 # Run similarity score computation
 ```{r}

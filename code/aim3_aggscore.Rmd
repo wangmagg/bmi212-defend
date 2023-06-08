@@ -12,9 +12,6 @@ library(readxl)
 library(tidyverse)
 library(ggplot2)
 
-if (!dir.exists(here('data/score_output'))) {
-  dir.create(here('data/score_output'))
-}
 ```
 
 # Data loading

@@ -7,48 +7,73 @@ output: html_document
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 library(readxl)
+
+if (!dir.exists(here('data/score_output'))) {
+  dir.create(here('data/score_output'))
+}
 ```
 
 # Data loading
+## Load GSPA output
 ```{r}
-offsides_df <- read.csv(here('data/score_input/OFFSIDES.csv'))
-sider_df <- read_excel(here('data/score_input/sider.xlsx'))
-candidate_cui <- read.csv(here('data/score_input/candidate_rxnorm_cui.csv'))
-candidate_cui$rxnorm_cui <- as.character(candidate_cui$rxnorm_cui)
-sider_df$rxnorm_cui <- as.character(sider_df$rxnorm_cui)
+# load results from GSPA 
+gspa_both_files <- list.files(path=here('data/gspa_output'),
+                         pattern='*_DSigDB_both.csv',
+                         full.names=TRUE,
+                         recursive=TRUE)
+gspa_up_files <- list.files(path=here('data/gspa_output'),
+                         pattern='*_DSigDB_up.csv',
+                         full.names=TRUE,
+                         recursive=TRUE)
+gspa_files <- c(gspa_both_files, gspa_up_files)
+```
+
+## Load side effect data
+```{r}
+offsides_df <- read.csv(here('data/score_input/OFFSIDES.csv')) |>
+  dplyr::rename(drug = drug_concept_name) |>
+  mutate(drug = tolower(drug))
+sider_df <- read_excel(here('data/score_input/sider.xlsx')) |>
+  mutate(drug = tolower(drug))
 ```
 
 # Run average PRR computation
 ```{r}
-candidate_offsides_prr <- offsides_df |>
-  dplyr::rename(rxnorm_cui = drug_rxnorn_id, drug = drug_concept_name) |>
-  inner_join(candidate_cui, by=c('drug', 'rxnorm_cui')) |>
-  group_by(drug, rxnorm_cui) |>
-  summarise(mean_PRR = mean(as.numeric(PRR), na.rm=TRUE)) |>
-  mutate(drug = tolower(drug)) |> 
-  dplyr::select(drug, rxnorm_cui, mean_PRR)
 
-candidate_sider_prr <- sider_df |>
-  group_by(drug, rxnorm_cui) |>
-  summarise(mean_PRR = mean(PRR, na.rm=TRUE))  |>
-  mutate(drug = tolower(drug)) |> 
-  dplyr::select(drug, rxnorm_cui, mean_PRR)
+candidate_effects_all_datasets <- c()
 
+for (f in gspa_files) {
+  dataset_name <- strsplit(basename(f), '\\.')[[1]][1]
+  
+  # get significantly enriched gene sets
+  gs_score_df <- read.csv(f)
+  gs_hit_df <- gs_score_df |>
+    filter(P.value < 0.05 & FDR < 0.5) |>
+    dplyr::rename(drug = Gene.Set) |>
+    mutate(drug = tolower(drug))
+  if (nrow(gs_hit_df) == 0) {
+    message('No significant results found for: ', f)
+    next
+  }
+  candidate_offsides_prr <- offsides_df |>
+    inner_join(gs_hit_df, by=c('drug')) |>
+    dplyr::select(drug, PRR) |>
+    group_by(drug) |>
+    summarise(mean_PRR = mean(as.numeric(PRR), na.rm=TRUE)) 
 
-candidate_effects <- bind_rows(candidate_offsides_prr, candidate_sider_prr) |>
-  group_by(drug, rxnorm_cui) |>
-  summarise(mean_PRR = mean(mean_PRR, na.rm=TRUE))
+  candidate_sider_prr <- sider_df |>
+    inner_join(gs_hit_df, by=c('drug')) |>
+    dplyr::select(drug, PRR) |>
+    group_by(drug) |>
+    summarise(mean_PRR = mean(PRR, na.rm=TRUE))
+  
+  candidate_effects <- bind_rows(candidate_offsides_prr, candidate_sider_prr) |>
+    group_by(drug) |>
+    summarise(mean_PRR = mean(mean_PRR, na.rm=TRUE))
+  
+  candidate_effects_all_datasets <- bind_rows(candidate_effects_all_datasets, candidate_effects)
+}
 
-write.csv(candidate_effects, here('data/score_output/metric_prr.csv'), row.names=FALSE)
-```
-
-```{r}
-top_prr_offsides <- offsides_df |>
-  dplyr::rename(rxnorm_cui = drug_rxnorn_id, drug = drug_concept_name) |>
-  inner_join(candidate_cui, by=c('drug', 'rxnorm_cui')) |>
-  group_by(drug, rxnorm_cui) |>
-  slice_max(PRR, n=10)
-top_prr_offsides
-
+write.csv(candidate_effects_all_datasets, here('data/score_output/metric_prr.csv'), row.names=FALSE)
 ```
 
