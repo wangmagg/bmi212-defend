@@ -1,7 +1,7 @@
 ---
-title: "Aim 1 - Differential Expression Analysis"
-output:
-html_notebook: default
+title: "aim1_diff_exp_analysis"
+author: "Maggie Wang"
+output: html_document
 ---
 
 ```{r, echo=FALSE, message=FALSE, warning=FALSE}
@@ -28,8 +28,7 @@ if (!dir.exists(here('figs'))) {
 }
 ```
 
-# DEA Functions
-
+# Differential Expression Analysis Functions
 ```{r}
 run_diffexp_analysis <- function(expr_data, design_matrix, probe_to_gene, save=T, out_dir=NA, dataset_name=NA) {
   # get top differentially expressed genes
@@ -177,18 +176,6 @@ gabriel_top150_dreg_genes <- get_top_gene_names(gabriel_diffexp_df, fc_thresh=0.
 
 ```
 
-```{r}
-# hierarchically cluster just the top genes
-gabriel_expr_data_top <- gabriel_expr_data_input |>
-  filter(rownames(gabriel_expr_data_input) %in% gabriel_diffexp_filt_df$probe_id)
-gabriel_top_heatmap_fname <- here('figs/GSE141549_top_expr_heatmap.png')
-plot_heatmap(gabriel_expr_data_top, gabriel_lbls[['disease stage:ch1']], gabriel_top_heatmap_fname)
-```
-
-```{r}
-
-```
-
 # GSE51981 (Tamaresis) DEA
 
 ```{r}
@@ -241,39 +228,13 @@ tamaresis_top150_dreg_genes <- get_top_gene_names(tamaresis_diffexp_df, fc_thres
                                                   out_dir='../data/diff_exp_output/', dataset_name='GSE51981')
 ```
 
-```{r}
-# hierarchically cluster just the top genes
-tamaresis_expr_data_top <- tamaresis_expr_data_input |>
-  filter(rownames(tamaresis_expr_data_input) %in% tamaresis_diffexp_filt_df$probe_id)
-tamaresis_top_heatmap_fname <- here('figs/GS51981_top_expr_heatmap.png')
-plot_heatmap(tamaresis_expr_data_top, tamaresis_lbls[['endometriosis/no endometriosis:ch1']], tamaresis_top_heatmap_fname)
-```
-
-# Plot correlation matrices
-
-```{r}
-gabriel_diffexp_df <- gabriel_diffexp_df |>
-  mutate(diffexpr = case_when(
-     (logFC >= 0.5 & adj.P.Val < 0.05) ~ 'up',
-     (logFC <= -0.5 & adj.P.Val < 0.05) ~ 'down',
-     TRUE ~ 'none'
-  ))
-ggplot(gabriel_diffexp_df, aes(x=logFC, y=-log10(adj.P.Val), color=diffexpr)) + 
-  scale_color_manual(values=c("blue", "gray", "red")) +
-  geom_point(size=1, show.legend=FALSE) + 
-  theme_minimal() +
-  ggtitle('GSE141549')
-
-ggsave(here('figs/GSE141549_volcano.png'))
-```
-
 # Make volcano plots
-
 ```{r}
 gabriel_diffexp_df$dataset_name <- 'GSE141549'
 tamaresis_diffexp_df$dataset_name <- 'GSE51981'
 
 diffexp_df <- bind_rows(gabriel_diffexp_df, tamaresis_diffexp_df)
+diffexp_df$dataset_name <- factor(diffexp_df$dataset_name, levels=c('GSE51981', 'GSE141549'))
 extreme_up <- diffexp_df |>
   group_by(dataset_name) |>
   slice_max(n=5, logFC) |>
@@ -289,7 +250,6 @@ extreme_down <- diffexp_df |>
 
 extreme <- bind_rows(extreme_up, extreme_down)
 
-
 diffexp_df <- diffexp_df |>
   mutate(
     diffexpr = case_when(
@@ -298,10 +258,14 @@ diffexp_df <- diffexp_df |>
       TRUE ~ 'none')) |>
   left_join(extreme, by=c('dataset_name'='dataset_name', 'logFC' = 'logFC', 'gene_symbol'='gene_symbol')) 
 
+volcano_colors <- c("blue", "gray", "red")
 ggplot(diffexp_df, aes(x=logFC, y=-log10(adj.P.Val), color=diffexpr, label=label)) + 
-  scale_color_manual(values=c("blue", "gray", "red")) +
+  scale_color_manual(values=volcano_colors) +
   geom_point(size=1, show.legend=FALSE, alpha=0.5) + 
   theme_minimal() +
+  theme(strip.text.x = element_text(size = 14),
+        axis.title = element_text(size = 16),
+        strip.background = element_rect(color="black")) +
   geom_text_repel(color='black', size=4) +
   geom_vline(xintercept=c(-0.5, 0.5), col="black", linetype='dashed') +
   geom_hline(yintercept=-log10(0.05), col="black", linetype='dashed') +
@@ -310,7 +274,7 @@ ggplot(diffexp_df, aes(x=logFC, y=-log10(adj.P.Val), color=diffexpr, label=label
 ggsave(here('figs/combined_volcano.png'))
 ```
 
-# Sanity Checking - Concordance in Differentially Expressed Genes
+# Concordance in Differentially Expressed Genes
 
 ```{r}
 # load top genes from Oskotsky paper 
@@ -326,17 +290,48 @@ oskotsky_top150_dreg_genes <- get_top_gene_names(tamaresis_diffexp_df, fc_thresh
 ```
 
 ```{r}
-# examine intersecting genes 
-intersect(gabriel_top150_ureg_genes$gene_symbol, tamaresis_top150_ureg_genes$gene_symbol)
-intersect(gabriel_top150_dreg_genes$gene_symbol, tamaresis_top150_dreg_genes$gene_symbol)
+oskotsky_upreg_genes <- oskotsky_diffexp_df |> 
+  filter(logFC > 0.5 & adj.P.Val < 0.05) |> 
+  dplyr::select(gene_symbol)
+oskotsky_downreg_genes <- oskotsky_diffexp_df |> 
+  filter(logFC < -0.5 & adj.P.Val < 0.05) |>
+  dplyr::select(gene_symbol)
+
+
+tamaresis_upreg_genes <- tamaresis_diffexp_df |> 
+  filter(logFC > 0.5 & adj.P.Val < 0.05) |> 
+  dplyr::select(gene_symbol)
+tamaresis_downreg_genes <- tamaresis_diffexp_df |> 
+  filter(logFC < -0.5 & adj.P.Val < 0.05) |>
+  dplyr::select(gene_symbol)
+
+gabriel_upreg_genes <- gabriel_diffexp_df |> 
+  filter(logFC > 0.5 & adj.P.Val < 0.05) |> 
+  dplyr::select(gene_symbol)
+gabriel_downreg_genes <- gabriel_diffexp_df |> 
+  filter(logFC < -0.5 & adj.P.Val < 0.05) |>
+  dplyr::select(gene_symbol)
 ```
 
 ```{r}
-length(intersect(gabriel_top150_ureg_genes$gene_symbol, oskotsky_top150_ureg_genes$gene_symbol))
-length(intersect(tamaresis_top150_ureg_genes$gene_symbol, oskotsky_top150_ureg_genes$gene_symbol))
-length(intersect(gabriel_top150_ureg_genes$gene_symbol, tamaresis_top150_ureg_genes$gene_symbol))
+# examine intersecting genes 
+gt_upreg_isect <- intersect(gabriel_upreg_genes$gene_symbol, tamaresis_upreg_genes$gene_symbol)
+gt_downreg_isect <- intersect(gabriel_downreg_genes$gene_symbol, tamaresis_downreg_genes$gene_symbol)
 
-length(intersect(gabriel_top150_dreg_genes$gene_symbol, oskotsky_top150_dreg_genes$gene_symbol))
-length(intersect(tamaresis_top150_dreg_genes$gene_symbol, oskotsky_top150_dreg_genes$gene_symbol))
-length(intersect(gabriel_top150_dreg_genes$gene_symbol, tamaresis_top150_dreg_genes$gene_symbol))
+go_upreg_isect <- intersect(gabriel_upreg_genes$gene_symbol, oskotsky_upreg_genes$gene_symbol)
+go_downreg_isect <- intersect(gabriel_downreg_genes$gene_symbol, oskotsky_downreg_genes$gene_symbol)
+
+to_upreg_isect <- intersect(tamaresis_upreg_genes$gene_symbol, oskotsky_upreg_genes$gene_symbol)
+to_downreg_isect <- intersect(tamaresis_downreg_genes$gene_symbol, oskotsky_downreg_genes$gene_symbol)
+```
+
+```{r}
+length(gt_upreg_isect)
+length(gt_downreg_isect)
+
+length(go_upreg_isect)
+length(go_downreg_isect)
+
+length(to_upreg_isect)
+length(to_downreg_isect)
 ```

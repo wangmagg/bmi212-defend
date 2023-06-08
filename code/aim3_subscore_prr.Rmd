@@ -1,7 +1,6 @@
 ---
-title: "aim3_side_effects"
+title: "aim3_subscore_prr"
 author: "Maggie Wang"
-date: "2023-06-02"
 output: html_document
 ---
 
@@ -41,5 +40,15 @@ candidate_effects <- bind_rows(candidate_offsides_prr, candidate_sider_prr) |>
   summarise(mean_PRR = mean(mean_PRR, na.rm=TRUE))
 
 write.csv(candidate_effects, here('data/score_output/metric_prr.csv'), row.names=FALSE)
+```
+
+```{r}
+top_prr_offsides <- offsides_df |>
+  dplyr::rename(rxnorm_cui = drug_rxnorn_id, drug = drug_concept_name) |>
+  inner_join(candidate_cui, by=c('drug', 'rxnorm_cui')) |>
+  group_by(drug, rxnorm_cui) |>
+  slice_max(PRR, n=10)
+top_prr_offsides
+
 ```
 

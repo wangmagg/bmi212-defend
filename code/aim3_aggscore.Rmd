@@ -1,7 +1,6 @@
 ---
-title: "aim3_scoring"
+title: "aim3_aggscore"
 author: "Maggie Wang"
-date: "2023-06-02"
 output: html_document
 ---
 
@@ -89,7 +88,7 @@ scores_df <- criteria_df |>
              TRUE ~ (value - mean(value)) / sd(value)),
          weighted_value = standardized_weight * standardized_value) |>
   dplyr::select(-impute_value)
-write.csv(scores_df, here('data/score_output/indiv_criteria_scores.csv'))
+write.csv(scores_df, here('data/score_output/individual_subscores.csv'))
 
 summed_scores_df <- scores_df |>
   group_by(drug, scheme) |>
@@ -98,7 +97,7 @@ summed_scores_df <- scores_df |>
   ungroup() |>
   group_by(scheme) |>
   mutate(rank = 1:n()) 
-write.csv(summed_scores_df, here('data/score_output/summed_scores.csv'))
+write.csv(summed_scores_df, here('data/score_output/aggregated_scores.csv'))
 ```
 
 # Make plots
@@ -116,25 +115,32 @@ criteria_lbls <- list("proximity_other_cands" = "OtherCands-Prox",
                       "raw_overlap_clinical_failed" = "FailedClin-Ovlp",
                       "endo_taking_excl_window" = "EHR-Endo",
                       "total_taking" = "EHR-Total",
-                      "mean_PRR" = "SideEffects-PRR",
-                      "score" = "Score")
+                      "mean_PRR" = "SideEffects-PRR")
 
 criteria_order <- names(criteria_lbls)
 
-drug_lbls <- list("pregabalin" = "PRE",
-                  "gabapentin" = "GAB",
+drug_lbls <- list("brassinolide_ctd_00001097" = "BRA",
                   "homocastasterone_ctd_00002741" = "HOM",
-                  "brassinolide_ctd_00001097" = "BRA",
+                  "1-trichloromethyl-1,2,3,4-tetrahydro-beta-carboline_ctd_00002689" = "1-TRI",
                   "3-methyladenine_ctd_00001217" = "3-MET",
-                  "1-trichloromethyl-1,2,3,4-tetrahydro-beta-carboline_ctd_00002689" = "1-TRI")
+                  "gabapentin" = "GAB",
+                  "pregabalin" = "PRE")
 drug_order <- names(drug_lbls)
+
+scheme_lbls <- c("varying_impute_worst" = "Varying-ImputeWorst", 
+                 "varying_impute_mean" = "Varying-ImputeMean", 
+                 "uniform_impute_worst" = "Uniform-ImputeWorst", 
+                 "uniform_impute_mean" = "Uniform-ImputeMean")
+
+scheme_order <- names(scheme_lbls)
+scheme_labeller <- as_labeller(scheme_lbls)
 ```
 
 ```{r}
 weights_vary$criteria_abbrev <- factor(weights_vary$criteria, level=criteria_order)
-weights_vary$scheme <- 'varying'
+weights_vary$scheme <- 'Varying'
 weights_unif$criteria_abbrev <- factor(weights_unif$criteria, level=criteria_order)
-weights_unif$scheme <- 'uniform'
+weights_unif$scheme <- 'Uniform'
 weights <- bind_rows(weights_vary, weights_unif)
 
 ggplot(weights, aes(x=criteria_abbrev, y=weight, fill=weight)) + 
@@ -157,18 +163,20 @@ ggsave(here('figs/weights_bar.png'))
 ```{r}
 scores_df$drug <- factor(scores_df$drug, level=drug_order)
 scores_df$criteria <- factor(scores_df$criteria, level=criteria_order)
-scores_df$scheme <- factor(scores_df$scheme, level=c('varying_impute_worst', 'varying_impute_mean', 'uniform_impute_worst', 'uniform_impute_mean'))
+scores_df$scheme <- factor(scores_df$scheme, level=scheme_order)
 
 ggplot(scores_df, aes(criteria, drug, fill=weighted_value)) + 
   geom_tile(color='black') + 
   scale_fill_gradient2(low = "#075AFF",
                        mid = "#FFFFCC",
-                       high = "#FF0000") + 
+                       high = "#FF0000",
+                       name = "Weighted Subscore") + 
   scale_x_discrete(labels=criteria_lbls) +
   scale_y_discrete(labels=drug_lbls, limits=rev) + 
-  theme(axis.text.x = element_text(angle = 90, vjust=0.5, hjust=1),
-        legend.title = element_blank()) +
-  facet_wrap(vars(scheme))
+  theme(axis.text.x = element_text(angle = 90, vjust=0.5, hjust=1)) +
+  facet_wrap(vars(scheme), labeller=scheme_labeller) +
+  xlab("Metric") + 
+  ylab("Drug Candidate")
 
 ggsave(here('figs/score_heatmaps.png'))
 
@@ -176,23 +184,29 @@ ggsave(here('figs/score_heatmaps.png'))
 ## Plot score and rank lineplots
 ```{r}
 summed_scores_df$drug <- factor(summed_scores_df$drug, level=drug_order)
-summed_scores_df$scheme <- factor(summed_scores_df$scheme, level=c('varying_impute_worst', 
-                                                                   'varying_impute_mean', 
-                                                                   'uniform_impute_worst', 
-                                                                   'uniform_impute_mean'))
+summed_scores_df$scheme <- factor(summed_scores_df$scheme, level=scheme_order)
 
 ggplot(summed_scores_df, aes(x=scheme, y=score, group=drug, color=drug)) +
   geom_line() +
   geom_point() +
-  scale_color_discrete(labels=drug_lbls)
+  scale_x_discrete(labels=scheme_lbls) +
+  scale_color_discrete(labels=drug_lbls) + 
+  scale_color_grey(labels=drug_lbls) +
+  xlab('Weight-Imputation Scheme') + 
+  ylab('Aggregate Score') +
+  theme_minimal()
 
 ggsave(here('figs/score_lineplot.png'))
 
 ggplot(summed_scores_df, aes(x=scheme, y=rank, group=drug, color=drug)) +
   geom_line() +
   geom_point() +
+  scale_x_discrete(labels=scheme_lbls) +
   scale_y_reverse(breaks=1:6) +
-  scale_color_discrete(labels=drug_lbls) 
+  scale_color_grey(labels=drug_lbls) + 
+  xlab('Weight-Imputation Scheme') + 
+  ylab('Aggregate Score') +
+  theme_minimal() 
 
 ggsave(here('figs/rank_lineplot.png'))
 
