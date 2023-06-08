@@ -6,7 +6,7 @@ BIOMEDIN 212 Final Project, Spring 2023
 
 Oana Enache (OE), Aditi Goyal (AG), Maggie Wang (MW)
 
-## File Structure and Contents
+## Contents
 ### Code/: 
   - `EDA/`: Contains exploratory data analyses for datasets from GEO 
      - `GSE134056_eda.Rmd`: EDA for GSE134056 (which was ultimately discarded due to technical issues). Author: OE
